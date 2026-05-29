@@ -221,7 +221,7 @@ class Config:
         default_settings = {
             "model": llm_model,  # 优先使用环境变量
             "base_url": llm_base_url,  # 优先使用环境变量
-            "api_key": openai_api_key,  # 从环境变量获取
+            "api_key": openai_api_key or base_llm.get("api_key", ""),  # 环境变量优先，回退到config.toml
             "max_tokens": base_llm.get("max_tokens", 4096),
             "max_input_tokens": base_llm.get("max_input_tokens"),
             "temperature": base_llm.get("temperature", 1.0),

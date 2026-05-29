@@ -859,6 +859,11 @@ class CafeRecommender(BaseTool):
 
             center_point = self._calculate_center_point(coordinates)
 
+            # 逆地理编码：将中心点坐标转为具体地址
+            center_address = await self._reverse_geocode(center_point[0], center_point[1])
+            if center_address:
+                logger.info(f"最佳会面点地址: {center_address}")
+
             # 处理多个关键词的搜索
             keywords_list = [kw.strip() for kw in keywords.split() if kw.strip()]
             primary_keyword = keywords_list[0] if keywords_list else "咖啡馆"
@@ -1003,6 +1008,7 @@ class CafeRecommender(BaseTool):
                 fallback_used,
                 fallback_keyword,
                 language=language,
+                center_address=center_address,
             )
             result_text = self._format_result_text(
                 location_info,
@@ -1357,6 +1363,30 @@ class CafeRecommender(BaseTool):
                     0.2 * (attempt + 1)
                 )  # 200ms递增延迟（优化：原为1s）
 
+        return None
+
+    async def _reverse_geocode(self, lng: float, lat: float) -> Optional[str]:
+        """逆地理编码：将坐标转换为具体地址"""
+        url = "https://restapi.amap.com/v3/geocode/regeo"
+        params = {
+            "key": self.api_key,
+            "location": f"{lng},{lat}",
+            "extensions": "base",
+        }
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, params=params) as response:
+                    if response.status != 200:
+                        logger.warning(f"逆地理编码请求失败: HTTP {response.status}")
+                        return None
+                    data = await response.json()
+                    if data.get("status") == "1":
+                        regeocode = data.get("regeocode", {})
+                        address = regeocode.get("formatted_address", "")
+                        if address and address != "[]":
+                            return address
+        except Exception as e:
+            logger.warning(f"逆地理编码异常: {e}")
         return None
 
     async def _smart_city_inference(
@@ -2553,9 +2583,20 @@ Available icons: bx-train (metro), bx-bus (bus), bx-taxi (taxi), bxs-car-garage 
         # ========== 硬筛选阶段 ==========
         original_count = len(places)
 
-        # 1. 评分筛选
+        # 1. 评分筛选（评分在 biz_ext.rating 中，无评分的场所不做过滤）
         if min_rating > 0:
-            places = [p for p in places if float(p.get("rating", 0) or 0) >= min_rating]
+            filtered = []
+            for p in places:
+                biz_ext = p.get("biz_ext", {}) or {}
+                rating_str = biz_ext.get("rating", "0") or "0"
+                try:
+                    rating = float(rating_str)
+                except (ValueError, TypeError):
+                    rating = 0
+                # 无评分的场所（rating==0）不参与硬筛选，保留机会
+                if rating == 0 or rating >= min_rating:
+                    filtered.append(p)
+            places = filtered
             logger.info(f"评分筛选(>={min_rating}): {original_count} -> {len(places)}")
 
         # 2. 距离筛选
@@ -2755,6 +2796,7 @@ Available icons: bx-train (metro), bx-bus (bus), bx-taxi (taxi), bxs-car-garage 
         fallback_keyword: Optional[str] = None,
         participant_locations: Optional[List[str]] = None,
         language: str = "zh",
+        center_address: Optional[str] = None,
     ) -> str:
         file_name_prefix = "place"
 
@@ -2776,6 +2818,7 @@ Available icons: bx-train (metro), bx-bus (bus), bx-taxi (taxi), bxs-car-garage 
             fallback_keyword,
             participant_locations,
             language,
+            center_address=center_address,
         )
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
         unique_id = str(uuid.uuid4())[:8]
@@ -2805,6 +2848,7 @@ Available icons: bx-train (metro), bx-bus (bus), bx-taxi (taxi), bxs-car-garage 
         fallback_keyword: Optional[str] = None,
         participant_locations: Optional[List[str]] = None,
         language: str = "zh",
+        center_address: Optional[str] = None,
     ) -> str:
         language = self._normalize_language(language)
         # 根据主题参数确定配置
@@ -2914,6 +2958,7 @@ Available icons: bx-train (metro), bx-bus (bus), bx-taxi (taxi), bxs-car-garage 
             keywords,
             places,
             language=language,
+            center_address=center_address,
         )
 
         location_markers = []
@@ -2946,10 +2991,13 @@ Available icons: bx-train (metro), bx-bus (bus), bx-taxi (taxi), bxs-car-garage 
                     }
                 )
 
+        center_marker_name = self._result_text(
+            language, "result.map.best_point", "Best Meeting Point"
+        )
+        if center_address:
+            center_marker_name += f" ({center_address})"
         center_marker = {
-            "name": self._result_text(
-                language, "result.map.best_point", "Best Meeting Point"
-            ),
+            "name": center_marker_name,
             "position": [center_point[0], center_point[1]],
             "icon": "center",
         }
@@ -3206,12 +3254,15 @@ Available icons: bx-train (metro), bx-bus (bus), bx-taxi (taxi), bxs-car-garage 
         markers_json = json.dumps(all_markers)
 
         amap_security_js_code = ""
-        if (
-            hasattr(config, "amap")
-            and hasattr(config.amap, "security_js_code")
-            and config.amap.security_js_code
-        ):
-            amap_security_js_code = config.amap.security_js_code
+        amap_js_api_key = ""
+        if hasattr(config, "amap") and config.amap:
+            if hasattr(config.amap, "security_js_code") and config.amap.security_js_code:
+                amap_security_js_code = config.amap.security_js_code
+            if hasattr(config.amap, "js_api_key") and config.amap.js_api_key:
+                amap_js_api_key = config.amap.js_api_key
+        # 如果没有专用 JS API Key，回退到环境变量或后端 key（不推荐）
+        if not amap_js_api_key:
+            amap_js_api_key = os.getenv("AMAP_JS_API_KEY", "") or self.api_key
 
         # 读取设计token CSS内容，用于自包含HTML
         design_tokens_css = ""
@@ -3521,7 +3572,7 @@ Available icons: bx-train (metro), bx-bus (bus), bx-taxi (taxi), bxs-car-garage 
         }
     </script>""".replace("__MARKERS__", markers_json)
                 .replace("__AMAP_SECURITY__", _amap_security.replace('"', '\\"'))
-                .replace("__AMAP_KEY__", str(self.api_key or "").replace('"', '\\"'))
+                .replace("__AMAP_KEY__", str(amap_js_api_key or "").replace('"', '\\"'))
                 .replace("__BEST_LABEL__", _best_point_text.replace('"', '\\"'))
                 .replace("__LOAD_ERROR__", _map_load_error_text.replace('"', '\\"'))
                 .replace("__CENTER_LAT__", str(_center_lat))
@@ -4198,7 +4249,7 @@ Available icons: bx-train (metro), bx-bus (bus), bx-taxi (taxi), bxs-car-garage 
             )
             if language == "en"
             else f'最佳会面点位于<span class="center-coords">{center_point[0]:.6f}, {center_point[1]:.6f}</span>附近'
-        }</p>
+        }{f'<br><i class="bx bx-map"></i> <span class="center-address">{center_address}</span>' if center_address else ''}</p>
                     <ul class="transport-list">{location_distance_html}</ul>
                 </div>
                 <div class="transport-card">
@@ -4345,6 +4396,7 @@ Available icons: bx-train (metro), bx-bus (bus), bx-taxi (taxi), bxs-car-garage 
         keywords: str,
         places: List[Dict] = None,  # 新增：传入推荐结果用于显示评分详情
         language: str = "zh",
+        center_address: Optional[str] = None,
     ) -> str:
         language = self._normalize_language(language)
         primary_keyword = self._get_primary_keyword(keywords)
@@ -4418,7 +4470,14 @@ Available icons: bx-train (metro), bx-bus (bus), bx-taxi (taxi), bxs-car-garage 
                         <span class="ai-algo-label">{"Midpoint coordinates" if language == "en" else "最佳会面点坐标"}</span>
                         <span class="ai-algo-value">{center_lat:.6f}°N, {center_lng:.6f}°E</span>
                     </div>
-                </div>
+                </div>{f'''
+                <div class="ai-algo-formula">
+                    <i class='bx bx-map'></i>
+                    <div>
+                        <span class="ai-algo-label">{"Address" if language == "en" else "具体地址"}</span>
+                        <span class="ai-algo-value">{center_address}</span>
+                    </div>
+                </div>''' if center_address else ''}
                 <div class="ai-algo-note">
                     {step2_note}
                 </div>
