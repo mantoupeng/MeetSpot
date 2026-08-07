@@ -255,13 +255,11 @@ git commit --allow-empty -m "chore: trigger redeploy" && git push origin main
 
 ## CI/CD
 
-9 GitHub Actions workflows in `.github/workflows/`:
+7 GitHub Actions workflows in `.github/workflows/`:
 
 | Workflow | Trigger | Purpose |
 |----------|---------|---------|
 | `ci.yml` | Push/PR | Python 3.11 & 3.12 tests, flake8, Docker build |
-| `ci-simple.yml` | Push/PR | Lightweight CI variant |
-| `ci-clean.yml` | Push/PR | Clean CI variant |
 | `postmortem-check.yml` | PRs | Warns if changes match known bug patterns |
 | `postmortem-update.yml` | `fix:` commits to main | Auto-generates postmortem YAML |
 | `keep-alive.yml` | Cron | Prevents Render free tier cold starts |
