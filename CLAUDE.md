@@ -126,6 +126,8 @@ Final Score = Rule Score * 0.4 + LLM Score * 0.6
 
 **Current status**: `agent_available = False` in `api/index.py` (line 59) — hardcoded off for memory reasons. `/api/find_meetspot_agent` endpoint exists but returns disabled error. Re-enabling requires bumping Render tier.
 
+The disabled-but-present agent code lives in `app/agent/` (`meetspot_agent.py`, `tools.py`, `base.py`); `create_meetspot_agent()` in `api/index.py` imports it lazily so the module isn't loaded while Agent mode is off.
+
 ### Token Counting
 
 `app/llm.py` uses UTF-8 byte length estimation (`len(text.encode("utf-8")) // 3`) instead of tiktoken. This avoids loading tiktoken's ~80MB model data. Precision is sufficient for internal token limit checks -- not used for billing or exact truncation.
@@ -164,7 +166,7 @@ Database layer (`app/db/`, `app/models/`) is optional -- core recommendation wor
 Payment integration: 302.ai checkout via `api/routers/payment.py`. Config: `PAY302_APP_ID`, `PAY302_SECRET`, `PAY302_API_URL` env vars. Free daily limit (`FREE_DAILY_LIMIT`, default 1) + credit purchase system (`CREDIT_PRICE_CENTS`, `CREDITS_PER_PURCHASE`). Signature verification in `app/payment/signature.py`.
 
 API routers:
-- `api/routers/auth.py` — SMS auth: `POST /api/auth/send_code`, `POST /api/auth/verify_code`, `GET /api/auth/me`
+- `api/routers/auth.py` — SMS auth: `POST /api/auth/send_code`, `POST /api/auth/verify_code`, `GET /api/auth/me` (backed by `app/auth/sms.py` for code send/validate and `app/auth/jwt.py` for token issue/`get_current_user`)
 - `api/routers/payment.py` — 302.ai checkout: `/create`, `/webhook`, `/success`, `/status/{id}`, `/balance`, `/free-remaining`
 - `api/routers/seo_pages.py` — SEO pages including `/compare` and `/en/compare`
 
