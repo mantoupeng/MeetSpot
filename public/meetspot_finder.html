@@ -3028,8 +3028,16 @@
           ac.addListener("place_changed", function () {
             const place = ac.getPlace();
             if (!place || !place.geometry || !place.geometry.location) return;
+            // Google's Autocomplete widget autofills the input with its own
+            // prediction description string, which doesn't reliably equal either
+            // place.name or place.formatted_address (varies by place type -- e.g.
+            // landmarks resolve formatted_address to a nearby postal address, not
+            // the landmark name). Force the input to match what we store, so the
+            // submit-time equality check below never silently misses.
+            const resolvedName = place.name || place.formatted_address;
+            input.value = resolvedName;
             locationCoords[input.id] = {
-              name: place.name || place.formatted_address,
+              name: resolvedName,
               address: place.formatted_address || place.name,
               lng: place.geometry.location.lng(),
               lat: place.geometry.location.lat(),
