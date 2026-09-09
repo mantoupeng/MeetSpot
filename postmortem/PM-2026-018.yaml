@@ -1,0 +1,33 @@
+id: PM-2026-018
+created_at: '2026-08-31T04:02:48.973727+00:00'
+source_commit: a87030c
+severity: medium
+title: sync Google Autocomplete input value with stored c
+description: 'The Google Places Autocomplete widget''s own input-fill behavior varies
+
+  by place type and doesn''t reliably equal either place.name or
+
+  place.formatted_address (e.g. landmarks resolve formatted_address to a
+
+  nearby postal address, not the landmark name). Since the submit
+
+  handler only reuses a pre-resolv'
+root_cause: See commit body for details
+triggers:
+  files:
+  - public/meetspot_finder.html
+  functions: []
+  patterns: []
+  keywords:
+  - general
+fix_pattern:
+  approach: sync Google Autocomplete input value with stored coord name
+  key_changes:
+  - sync Google Autocomplete input value with stored coord name
+verification:
+- Review related code changes
+related:
+  files_changed:
+  - public/meetspot_finder.html
+tags:
+- general
