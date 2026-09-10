@@ -1058,6 +1058,7 @@ class CafeRecommender(BaseTool):
                 skipped_notice=skipped_notice,
                 language=language,
                 commute_check=(center_evaluation or {}).get("commute_check"),
+                center_address=center_address,
             )
             result_text = self._format_result_text(
                 location_info,
@@ -1967,26 +1968,62 @@ class CafeRecommender(BaseTool):
         if types:
             params["types"] = types
 
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, params=params) as response:
-                if response.status != 200:
-                    logger.error(
-                        f"高德地图POI搜索失败: {response.status}, 参数: {params}"
-                    )
+        # 重试机制，最多重试3次（优化延迟以提升性能）
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                # 首次请求无延迟，重试时添加较短延迟
+                if attempt > 0:
+                    await asyncio.sleep(0.2 * attempt)  # 200ms递增延迟
+
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(url, params=params) as response:
+                        if response.status != 200:
+                            logger.error(
+                                f"高德地图POI搜索失败: {response.status}, 参数: {params}, 尝试: {attempt + 1}"
+                            )
+                            if attempt == max_retries - 1:
+                                return []
+                            continue
+
+                        data = await response.json()
+
+                        # 检查API并发限制错误
+                        if data.get("info") == "CUQPS_HAS_EXCEEDED_THE_LIMIT":
+                            logger.warning(
+                                f"POI搜索API并发限制超出, 参数: {params}, 尝试: {attempt + 1}, 等待后重试"
+                            )
+                            if attempt == max_retries - 1:
+                                logger.error(
+                                    f"POI搜索失败: API并发限制超出, 参数: {params}"
+                                )
+                                return []
+                            await asyncio.sleep(0.5 * (attempt + 1))  # 500ms延迟
+                            continue
+
+                        if data["status"] != "1":
+                            logger.error(
+                                f"POI搜索API返回错误: {data.get('info', '未知错误')}, 参数: {params}"
+                            )
+                            return []
+
+                        pois = data.get("pois", [])
+                        # 缓存大小限制：超限时删除最旧的条目
+                        if len(self.poi_cache) >= self.POI_CACHE_MAX:
+                            oldest_key = next(iter(self.poi_cache))
+                            del self.poi_cache[oldest_key]
+                        self.poi_cache[cache_key] = pois
+                        return pois
+
+            except Exception as e:
+                logger.error(
+                    f"POI搜索请求异常: {str(e)}, 参数: {params}, 尝试: {attempt + 1}"
+                )
+                if attempt == max_retries - 1:
                     return []
-                data = await response.json()
-                if data["status"] != "1":
-                    logger.error(
-                        f"POI搜索API返回错误: {data.get('info', '未知错误')}, 参数: {params}"
-                    )
-                    return []
-                pois = data.get("pois", [])
-                # 缓存大小限制：超限时删除最旧的条目
-                if len(self.poi_cache) >= self.POI_CACHE_MAX:
-                    oldest_key = next(iter(self.poi_cache))
-                    del self.poi_cache[oldest_key]
-                self.poi_cache[cache_key] = pois
-                return pois
+                await asyncio.sleep(0.2 * (attempt + 1))  # 200ms递增延迟
+
+        return []
 
     # ========== V2 多维度评分系统 ==========
 
@@ -2998,6 +3035,7 @@ Return exactly 3 travel and parking suggestions as a JSON array:
         participant_locations: Optional[List[str]] = None,
         language: str = "zh",
         commute_check: Optional[Dict] = None,
+        center_address: Optional[str] = None,
     ) -> str:
         file_name_prefix = "place"
 
@@ -3021,6 +3059,7 @@ Return exactly 3 travel and parking suggestions as a JSON array:
             participant_locations,
             language,
             commute_check,
+            center_address,
         )
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
         unique_id = str(uuid.uuid4())[:8]
@@ -3052,6 +3091,7 @@ Return exactly 3 travel and parking suggestions as a JSON array:
         participant_locations: Optional[List[str]] = None,
         language: str = "zh",
         commute_check: Optional[Dict] = None,
+        center_address: Optional[str] = None,
     ) -> str:
         language = self._normalize_language(language)
         # 根据主题参数确定配置
@@ -3162,6 +3202,7 @@ Return exactly 3 travel and parking suggestions as a JSON array:
             places,
             language=language,
             commute_check=commute_check,
+            center_address=center_address,
         )
 
         location_markers = []
@@ -4690,13 +4731,10 @@ Return exactly 3 travel and parking suggestions as a JSON array:
         keywords: str,
         places: List[Dict] = None,  # 新增：传入推荐结果用于显示评分详情
         language: str = "zh",
-<<<<<<< HEAD
         center_address: Optional[str] = None,
-=======
         commute_check: Optional[
             Dict
         ] = None,  # 真实通勤时间核验记录（见 _verify_commute_fairness）
->>>>>>> main
     ) -> str:
         language = self._normalize_language(language)
         primary_keyword = self._get_primary_keyword(keywords)
